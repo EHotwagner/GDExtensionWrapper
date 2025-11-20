@@ -1,137 +1,111 @@
-# F# GDExtension Binding Design Document
+# F# GDExtension Binding Design Document (Embedded / libgodot)
 
 ## 1. Executive Summary
-This document outlines the design for a high-performance, idiomatic F# binding for the Godot Engine using the GDExtension interface. The goal is to allow developers to write Godot game logic, nodes, and plugins entirely in F#, leveraging the language's strong type system, functional paradigms, and .NET ecosystem.
+This document outlines the design for an F# binding that allows **embedding Godot 4 as a library** (`libgodot`) into a standalone .NET application.
+Unlike the standard GDExtension approach (where Godot loads a DLL), here the **F# application is the host** and loads the Godot engine as a dependency. This allows for standard .NET (JIT) usage, rich debugging, and full control over the application lifecycle.
 
 ## 2. Architecture Overview
 
-The project consists of two main components:
-1.  **The Generator (`GDExtensionWrapper.Generator`)**: A console application that parses `extension_api.json` and emits F# source code.
-2.  **The Runtime (`GDExtensionWrapper.Runtime`)**: A library containing the core interop logic, base types, and the generated code.
+The project consists of:
+1.  **The Generator (`GDExtensionWrapper.Generator`)**: Parses `extension_api.json` and emits F# source code.
+2.  **The Runtime (`GDExtensionWrapper.Runtime`)**:
+    *   Loads `libgodot` (shared library).
+    *   Initializes the engine via the C API.
+    *   Provides the generated API to the user.
 
-### Build Flow
-1.  Godot Engine -> `extension_api.json`
-2.  `extension_api.json` -> **Generator** -> `Generated.fs`
-3.  `Generated.fs` + **Runtime Core** -> **F# Compiler** -> `MyGame.dll` (NativeAOT Shared Library)
-4.  `MyGame.dll` -> Godot Engine (loaded via `.gdextension` file)
+### Execution Flow
+1.  **F# App Start**: `dotnet run` -> `Program.fs`.
+2.  **Load Engine**: `NativeLibrary.Load("godot")`.
+3.  **Init Engine**: Call `godot_main` (or equivalent initialization sequence).
+4.  **Game Loop**: The F# app drives the loop or yields control to Godot.
+5.  **Interaction**: F# code uses generated bindings to manipulate the SceneTree.
 
 ## 3. Technical Approach & Libraries
 
 ### 3.1. Interop Strategy
-To communicate with Godot's C API, we will use **NativeAOT** (Ahead-of-Time compilation) to produce a native shared library that exports the required C symbols (`godot_gdextension_entry`).
+Since we are the host, we do **not** need NativeAOT. We can use standard .NET 8+.
 
-*   **`System.Runtime.InteropServices`**: For `NativeLibrary`, `UnmanagedCallersOnly`, and marshalling.
-*   **`FSharp.NativeInterop`**: For low-level pointer arithmetic (`NativePtr`) where performance is critical.
-*   **P/Invoke**: We will define function pointer delegates for every GDExtension interface function.
+*   **`System.Runtime.InteropServices`**:
+    *   `NativeLibrary.Load`: To dynamically load the custom-built `libgodot`.
+    *   `[<DllImport>]` / Function Pointers: To call into the GDExtension Interface.
+*   **`extension_api.json`**: Still the source of truth. We generate bindings against the API exposed by `libgodot`.
 
 ### 3.2. Libraries
-*   **Parsing**: `System.Text.Json` for reading `extension_api.json`.
-*   **Build**: standard `.fsproj` with `<PublishAot>true</PublishAot>`.
+*   **Parsing**: `System.Text.Json`.
+*   **Host App**: Standard F# Console App (`.fsproj`).
 
 ## 4. API Structure & Type Mapping
 
 ### 4.1. The `Variant` Type
-The `Variant` is the core dynamic type in Godot. In F#, we have two main approaches: a Discriminated Union (DU) or a Struct with Active Patterns.
-
-**Decision**: **Struct with Active Patterns**.
-A full DU would require allocating a new .NET object every time a Variant crosses the boundary, which is too slow for a game engine. We will wrap the native C struct and provide idiomatic pattern matching via a companion module.
-
+(Same as before: Struct with Active Patterns)
 ```fsharp
 [<Struct>]
 type Variant =
-    val private handle: nativeint // Opaque pointer or struct data
-    member this.Type = ... // implementation to get type
+    val private handle: nativeint
+    member this.Type = ... 
 
 [<AutoOpen>]
 module VariantPatterns =
-    // Active Pattern for idiomatic matching
-    let (|Int|Float|String|Nil|Other|) (v: Variant) =
-        match v.Type with
-        | VariantType.Int -> Int (v.AsInt64())
-        | VariantType.Float -> Float (v.AsDouble())
-        // ...
+    let (|Int|Float|String|Nil|Other|) (v: Variant) = ...
 ```
 
-### 4.2. Godot Objects (Nodes, Resources)
-Godot objects are reference types. We will map them to F# classes.
+### 4.2. Godot Objects
+(Same as before: Wrapper classes holding pointers)
 
-*   **Base Class**: `GodotObject`
-    *   Holds the `IntPtr` handle to the native object.
-    *   Implements `IDisposable` (optional, mostly for RefCounted).
-    *   Overrides `GetHashCode` and `Equals` based on the handle.
-*   **Inheritance**: The generator will replicate the Godot hierarchy.
-    *   `Node` inherits `GodotObject`
-    *   `Node3D` inherits `Node`
-*   **Methods**: Generated as member methods.
-    *   `member this.SetPosition(pos: Vector3) = ...`
-    *   Internally calls `godot_icall_...` helpers.
+### 4.3. Initialization API
+We need a new module to handle the engine startup.
 
-### 4.3. Enums
-Mapped directly to F# enums.
 ```fsharp
-type Error =
-    | Ok = 0
-    | Failed = 1
-```
-
-### 4.4. Signals
-Mapped to F# `IEvent<_>` or standard .NET `event`.
-```fsharp
-member this.Ready = new Event<unit>()
+module GodotEngine =
+    let Initialize (args: string[]) =
+        // Load libgodot
+        // Call main entry point
+        ()
 ```
 
 ## 5. Memory Management & Lifecycles
 
-This is the most critical part of the design. We must bridge .NET's Garbage Collector (GC) with Godot's manual/reference-counted memory model.
-
 ### 5.1. Object Identity
-When Godot passes an `Object*` to F#, we must ensure we return the *same* F# wrapper instance if it already exists.
-*   **Cache**: A `Dictionary<IntPtr, WeakReference<GodotObject>>` mapping native pointers to F# wrappers.
+We still need to map `Object*` to F# wrappers.
+*   **Cache**: `Dictionary<IntPtr, WeakReference<GodotObject>>`.
 
-### 5.2. Script Instances (Extending Godot Classes)
-When a user defines a new class in F# (`type MyPlayer() = inherit Node3D()`), we need to attach this to a Godot object.
-1.  **GDExtension Class Creation**: We register the F# type as a GDExtension class.
-2.  **Instance Binding**: When Godot instantiates this class, it calls our `create_instance` callback.
-3.  **GCHandle**: We allocate a `GCHandle.Alloc(fsharpObj, GCHandleType.Normal)` to prevent the GC from collecting the F# object while Godot is using it.
-4.  **Cleanup**: When Godot destroys the object (notification `OBJECT_PREDELETE` or `free_instance`), we `GCHandle.Free()` the handle, allowing the GC to collect the F# object.
-
-### 5.3. RefCounted Objects
-For `RefCounted` types (like `Resource`), we must hook into `unreference`.
-*   If F# holds a strong reference, the RefCount should be > 0.
-*   If F# drops the reference, we decrement.
+### 5.2. Threading
+Godot is not thread-safe. All API calls must happen on the thread that initialized the engine (usually the main thread).
+*   **SynchronizationContext**: We might need to install a custom context to marshal async/await calls back to the main loop.
 
 ## 6. Implementation Roadmap
 
 ### Phase 1: The Generator Core
 1.  Define F# record types representing the `extension_api.json` schema.
 2.  Implement JSON parsing.
-3.  Implement a basic text emitter (StringBuilder or a templating engine).
 
-### Phase 2: The Runtime Core (NativeAOT)
-1.  Create the `GDExtensionWrapper.Runtime` project.
-2.  Implement `godot_gdextension_entry` using `[<UnmanagedCallersOnly>]`.
-3.  Load the basic function pointers (`get_proc_address`, `print_error`, etc.).
+### Phase 2: The Runtime Core (Embedding)
+1.  **Build libgodot**: Compile Godot from source as a shared library.
+2.  **Loader**: Implement `NativeLibrary.Load` logic.
+3.  **Init**: Implement the C# -> C initialization call.
 
 ### Phase 3: Binding Generation
 1.  **Enums**: Generate `Enums.fs`.
-2.  **Builtins**: Generate `Vector3.fs`, `String.fs` (wrapping native calls).
-3.  **Classes**: Generate `Classes.fs` with method stubs.
+2.  **Builtins**: Generate `Vector3.fs`, `String.fs`.
+3.  **Classes**: Generate `Classes.fs`.
 
 ### Phase 4: User Scripting Support
-1.  Implement the `ClassDB` registration logic.
-2.  Implement the `GCHandle` lifecycle management.
-3.  Test with a simple "Hello World" rotating cube.
+1.  Test with a simple "Hello World" that initializes Godot and prints to the console using `GD.Print`.
 
 ## 7. Example User Code
 
 ```fsharp
-namespace MyGame
-
 open Godot
 
-type RotatingCube() =
-    inherit Node3D()
-
-    override this._Process(delta) =
-        this.RotateY(delta * 2.0)
+[<EntryPoint>]
+let main args =
+    // Start Godot
+    GodotEngine.Initialize(args)
+    
+    // Use Godot API
+    let node = new Node3D()
+    node.SetPosition(Vector3(1.0, 2.0, 3.0))
+    GD.Print(node.GetPosition())
+    
+    0
 ```
