@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<linker>
+  <assembly fullname="GDExtensionWrapper">
+    <resource name="FSharpSignatureData.GDExtensionWrapper" action="remove"></resource>
+    <resource name="FSharpSignatureCompressedData.GDExtensionWrapper" action="remove"></resource>
+    <resource name="FSharpSignatureDataB.GDExtensionWrapper" action="remove"></resource>
+    <resource name="FSharpSignatureCompressedDataB.GDExtensionWrapper" action="remove"></resource>
+    <resource name="FSharpOptimizationData.GDExtensionWrapper" action="remove"></resource>
+    <resource name="FSharpOptimizationCompressedData.GDExtensionWrapper" action="remove"></resource>
+    <resource name="FSharpOptimizationDataB.GDExtensionWrapper" action="remove"></resource>
+    <resource name="FSharpOptimizationCompressedDataB.GDExtensionWrapper" action="remove"></resource>
+    <resource name="FSharpOptimizationInfo.GDExtensionWrapper" action="remove"></resource>
+    <resource name="FSharpSignatureInfo.GDExtensionWrapper" action="remove"></resource>
+  </assembly>
+</linker>

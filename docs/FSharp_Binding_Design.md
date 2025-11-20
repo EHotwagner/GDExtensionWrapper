@@ -34,15 +34,18 @@ To communicate with Godot's C API, we will use **NativeAOT** (Ahead-of-Time comp
 The `Variant` is the core dynamic type in Godot. In F#, we have two main approaches: a Discriminated Union (DU) or a Struct with Active Patterns.
 
 **Decision**: **Struct with Active Patterns**.
-A full DU would require allocating a new .NET object every time a Variant crosses the boundary, which is too slow for a game engine. We will wrap the native C struct and provide idiomatic pattern matching.
+A full DU would require allocating a new .NET object every time a Variant crosses the boundary, which is too slow for a game engine. We will wrap the native C struct and provide idiomatic pattern matching via a companion module.
 
 ```fsharp
 [<Struct>]
 type Variant =
     val private handle: nativeint // Opaque pointer or struct data
-    
+    member this.Type = ... // implementation to get type
+
+[<AutoOpen>]
+module VariantPatterns =
     // Active Pattern for idiomatic matching
-    static member (|Int|Float|String|Nil|...) (v: Variant) =
+    let (|Int|Float|String|Nil|Other|) (v: Variant) =
         match v.Type with
         | VariantType.Int -> Int (v.AsInt64())
         | VariantType.Float -> Float (v.AsDouble())
