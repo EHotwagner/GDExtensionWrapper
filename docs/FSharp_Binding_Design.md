@@ -52,16 +52,44 @@ module VariantPatterns =
 ### 4.2. Godot Objects
 (Same as before: Wrapper classes holding pointers)
 
-### 4.3. Initialization API
-We need a new module to handle the engine startup.
+### 4.3. Initialization API (Migeran libgodot)
+The `migeran/libgodot` fork exposes a specific C API for initialization.
 
+**C Signature:**
+```c
+GDExtensionObjectPtr gdextension_create_godot_instance(int p_argc, char *p_argv[], GDExtensionInitializationFunction p_init_func);
+```
+
+**F# Binding:**
 ```fsharp
 module GodotEngine =
+    [<DllImport("godot", CallingConvention = CallingConvention.Cdecl)>]
+    extern nativeint gdextension_create_godot_instance(int argc, string[] argv, IntPtr init_func)
+
     let Initialize (args: string[]) =
-        // Load libgodot
-        // Call main entry point
-        ()
+        // 1. Define our GDExtension initialization callback
+        let initCallback = ... 
+        
+        // 2. Create the instance
+        let instanceHandle = gdextension_create_godot_instance(args.Length, args, initCallback)
+        
+        // 3. Wrap the returned handle in a GodotInstance object
+        let instance = new GodotInstance(instanceHandle)
+        
+        // 4. Start the engine
+        instance.Start()
+        instance
 ```
+
+**The `GodotInstance` Class**:
+This specific build of Godot adds a `GodotInstance` class to the API. We must ensure we generate bindings for it.
+*   **Methods**: `start()`, `iteration()`, `shutdown()`, `is_started()`.
+*   **Usage**: The host application calls `instance.Iteration()` in its own loop to drive the engine.
+
+### 4.4. API Source (`extension_api.json`)
+**Crucial**: We must generate `extension_api.json` from the **libgodot build itself**, not a standard Godot build.
+*   The `GodotInstance` class and `DisplayServerEmbedded` classes are only present in this custom build.
+*   Command: `./godot_server --dump-extension-api` (or similar, depending on the build artifact).
 
 ## 5. Memory Management & Lifecycles
 
