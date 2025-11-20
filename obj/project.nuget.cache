@@ -1,0 +1,10 @@
+{
+  "version": 2,
+  "dgSpecHash": "8jGeD/pBEik=",
+  "success": true,
+  "projectFilePath": "C:\\Users\\ehotw\\Documents\\GitHub\\GDExtensionWrapper\\GDExtensionWrapper.fsproj",
+  "expectedPackageFiles": [
+    "C:\\Users\\ehotw\\.nuget\\packages\\fsharp.core\\10.0.100-preview7.25451.107\\fsharp.core.10.0.100-preview7.25451.107.nupkg.sha512"
+  ],
+  "logs": []
+}
