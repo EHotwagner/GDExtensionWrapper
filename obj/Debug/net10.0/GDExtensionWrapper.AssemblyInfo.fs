@@ -10,7 +10,7 @@ open System.Reflection
 [<assembly: System.Reflection.AssemblyCompanyAttribute("GDExtensionWrapper")>]
 [<assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")>]
 [<assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")>]
-[<assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+f12ebc93e51fd87a9dd3cbf49c4d3559111844a0")>]
+[<assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+4da054b25b1075d7d1c07b836303ab0916d63906")>]
 [<assembly: System.Reflection.AssemblyProductAttribute("GDExtensionWrapper")>]
 [<assembly: System.Reflection.AssemblyTitleAttribute("GDExtensionWrapper")>]
 [<assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")>]

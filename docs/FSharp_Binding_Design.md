@@ -1,139 +1,95 @@
-# F# GDExtension Binding Design Document (Embedded / libgodot)
+# F# Binding Design for Godot 4
 
 ## 1. Executive Summary
-This document outlines the design for an F# binding that allows **embedding Godot 4 as a library** (`libgodot`) into a standalone .NET application.
-Unlike the standard GDExtension approach (where Godot loads a DLL), here the **F# application is the host** and loads the Godot engine as a dependency. This allows for standard .NET (JIT) usage, rich debugging, and full control over the application lifecycle.
+This document outlines the architectural design for an F# binding to Godot 4. It addresses two distinct use cases:
+1.  **LibGodot Embedding (Host):** The .NET application hosts Godot as a library. This is the user's primary interest but requires a **custom build** or fork (e.g., `migeran/libgodot`) as standard Godot 4 does not yet expose a public C API for embedding on desktop.
+2.  **GDExtension (Plugin):** The standard supported method where Godot loads the F# assembly.
 
-## 2. Architecture Overview
+## 2. Architecture Options
 
-The project consists of:
-1.  **The Generator (`GDExtensionWrapper.Generator`)**: Parses `extension_api.json` and emits F# source code.
-2.  **The Runtime (`GDExtensionWrapper.Runtime`)**:
-    *   Loads `libgodot` (shared library).
-    *   Initializes the engine via the C API.
-    *   Provides the generated API to the user.
+### Option A: LibGodot Embedding (Host)
+*   **Architecture:** `.NET App` -> `NativeLibrary.Load` -> `libgodot.dll`
+*   **Status:** **Experimental / Custom Build Required**.
+*   **Entry Point:** Requires exposing `Main::setup`, `Main::iteration` via `extern "C"`, or using a fork like `migeran/libgodot` which provides `gdextension_create_godot_instance`.
+*   **Pros:** Full control of main loop, easy integration into existing .NET apps.
+*   **Cons:** Requires maintaining a custom Godot build; API is not stable.
 
-### Execution Flow
-1.  **F# App Start**: `dotnet run` -> `Program.fs`.
-2.  **Load Engine**: `NativeLibrary.Load("godot")`.
-3.  **Init Engine**: Call `godot_main` (or equivalent initialization sequence).
-4.  **Game Loop**: The F# app drives the loop or yields control to Godot.
-5.  **Interaction**: F# code uses generated bindings to manipulate the SceneTree.
+### Option B: GDExtension (Plugin)
+*   **Architecture:** `Godot Executable` -> `GDExtension Interface` -> `F# Assembly`
+*   **Status:** **Stable / Supported**.
+*   **Entry Point:** The F# assembly exports `godot_gdextension_entry` which Godot calls on startup.
+*   **Pros:** Works with standard Godot binaries (Steam/Website); simpler distribution.
+*   **Cons:** Godot owns the process lifecycle.
 
-## 3. Technical Approach & Libraries
+## 3. Implementation Details: LibGodot Embedding
 
-### 3.1. Interop Strategy
-Since we are the host, we do **not** need NativeAOT. We can use standard .NET 8+.
+### 3.1. Build Requirements
+To use Godot as a library, you must compile it from source:
+```bash
+# Windows
+scons platform=windows target=template_debug library_type=shared_library
+```
+*Note: You may need to patch `platform/windows/godot_windows.cpp` to export the `main` logic if not using a specialized fork.*
 
-*   **`System.Runtime.InteropServices`**:
-    *   `NativeLibrary.Load`: To dynamically load the custom-built `libgodot`.
-    *   `[<DllImport>]` / Function Pointers: To call into the GDExtension Interface.
-*   **`extension_api.json`**: Still the source of truth. We generate bindings against the API exposed by `libgodot`.
-
-### 3.2. Libraries
-*   **Parsing**: `System.Text.Json`.
-*   **Host App**: Standard F# Console App (`.fsproj`).
-
-## 4. API Structure & Type Mapping
-
-### 4.1. The `Variant` Type
-(Same as before: Struct with Active Patterns)
+### 3.2. Initialization (C API)
+If using a custom build that exposes the `Main` class methods via C:
 ```fsharp
-[<Struct>]
-type Variant =
-    val private handle: nativeint
-    member this.Type = ... 
+[<DllImport("godot")>]
+extern int godot_init(int argc, string[] argv)
 
-[<AutoOpen>]
-module VariantPatterns =
-    let (|Int|Float|String|Nil|Other|) (v: Variant) = ...
+[<DllImport("godot")>]
+extern bool godot_step()
+
+[<DllImport("godot")>]
+extern void godot_shutdown()
 ```
 
-### 4.2. Godot Objects
-(Same as before: Wrapper classes holding pointers)
-
-### 4.3. Initialization API (Migeran libgodot)
-The `migeran/libgodot` fork exposes a specific C API for initialization.
-
-**C Signature:**
-```c
-GDExtensionObjectPtr gdextension_create_godot_instance(int p_argc, char *p_argv[], GDExtensionInitializationFunction p_init_func);
-```
-
-**F# Binding:**
-```fsharp
-module GodotEngine =
-    [<DllImport("godot", CallingConvention = CallingConvention.Cdecl)>]
-    extern nativeint gdextension_create_godot_instance(int argc, string[] argv, IntPtr init_func)
-
-    let Initialize (args: string[]) =
-        // 1. Define our GDExtension initialization callback
-        let initCallback = ... 
-        
-        // 2. Create the instance
-        let instanceHandle = gdextension_create_godot_instance(args.Length, args, initCallback)
-        
-        // 3. Wrap the returned handle in a GodotInstance object
-        let instance = new GodotInstance(instanceHandle)
-        
-        // 4. Start the engine
-        instance.Start()
-        instance
-```
-
-**The `GodotInstance` Class**:
-This specific build of Godot adds a `GodotInstance` class to the API. We must ensure we generate bindings for it.
-*   **Methods**: `start()`, `iteration()`, `shutdown()`, `is_started()`.
-*   **Usage**: The host application calls `instance.Iteration()` in its own loop to drive the engine.
-
-### 4.4. API Source (`extension_api.json`)
-**Crucial**: We must generate `extension_api.json` from the **libgodot build itself**, not a standard Godot build.
-*   The `GodotInstance` class and `DisplayServerEmbedded` classes are only present in this custom build.
-*   Command: `./godot_server --dump-extension-api` (or similar, depending on the build artifact).
-
-## 5. Memory Management & Lifecycles
-
-### 5.1. Object Identity
-We still need to map `Object*` to F# wrappers.
-*   **Cache**: `Dictionary<IntPtr, WeakReference<GodotObject>>`.
-
-### 5.2. Threading
-Godot is not thread-safe. All API calls must happen on the thread that initialized the engine (usually the main thread).
-*   **SynchronizationContext**: We might need to install a custom context to marshal async/await calls back to the main loop.
-
-## 6. Implementation Roadmap
-
-### Phase 1: The Generator Core
-1.  Define F# record types representing the `extension_api.json` schema.
-2.  Implement JSON parsing.
-
-### Phase 2: The Runtime Core (Embedding)
-1.  **Build libgodot**: Compile Godot from source as a shared library.
-2.  **Loader**: Implement `NativeLibrary.Load` logic.
-3.  **Init**: Implement the C# -> C initialization call.
-
-### Phase 3: Binding Generation
-1.  **Enums**: Generate `Enums.fs`.
-2.  **Builtins**: Generate `Vector3.fs`, `String.fs`.
-3.  **Classes**: Generate `Classes.fs`.
-
-### Phase 4: User Scripting Support
-1.  Test with a simple "Hello World" that initializes Godot and prints to the console using `GD.Print`.
-
-## 7. Example User Code
+### 3.3. Native Library Loading
+Since `libgodot` is a native DLL, use `NativeLibrary.Load` with a `DllImportResolver` to handle platform differences (e.g., `.dll` vs `.so`).
 
 ```fsharp
-open Godot
-
-[<EntryPoint>]
-let main args =
-    // Start Godot
-    GodotEngine.Initialize(args)
-    
-    // Use Godot API
-    let node = new Node3D()
-    node.SetPosition(Vector3(1.0, 2.0, 3.0))
-    GD.Print(node.GetPosition())
-    
-    0
+module NativeLoader =
+    let ImportResolver (libraryName: string) (assembly: Assembly) (searchPath: DllImportSearchPath option) : IntPtr =
+        if libraryName = "godot" then
+            NativeLibrary.Load("path/to/libgodot.dll")
+        else
+            IntPtr.Zero
 ```
+
+## 4. Implementation Details: GDExtension Interface
+
+Regardless of the hosting model, interaction with the engine uses the **GDExtension C API**.
+
+### 4.1. `extension_api.json`
+This file is the source of truth. The F# generator must parse it to create:
+*   **Classes:** `Node`, `RefCounted`, `Vector3`.
+*   **Methods:** `get_position()`, `set_position()`.
+*   **Enums:** `Error`, `Key`.
+
+### 4.2. `gdextension_interface.h`
+The F# runtime must load function pointers from this interface:
+*   `get_proc_address`: Bootstraps all other functions.
+*   `variant_new_nil`: Creates Variants.
+*   `object_method_bind_ptrcall`: Fast method invocation.
+
+### 4.3. Type Marshaling
+*   **F# `int`** -> `GDExtensionInt` (int64)
+*   **F# `float`** -> `GDExtensionFloat` (double)
+*   **F# `string`** -> `GDExtensionStringPtr` (pointer to Godot String)
+*   **F# Objects** -> `GDExtensionObjectPtr` (opaque pointer)
+
+## 5. F# Specifics
+
+### 5.1. Memory Management
+*   **Ref<T>:** Use `IDisposable` to decrement reference counts for `RefCounted` types.
+*   **Godot Objects:** For non-ref-counted objects (Nodes), be careful not to free them if Godot owns them.
+
+### 5.2. Generator Strategy
+1.  **Parse** `extension_api.json`.
+2.  **Generate** F# records/classes for Godot types.
+3.  **Emit** P/Invoke signatures for `gdextension_interface.h`.
+
+## 6. Next Steps
+1.  **Decide on Build:** Stick with standard GDExtension (Option B) for initial development, or commit to building a custom `libgodot` (Option A).
+2.  **Generate Bindings:** Run the generator against `extension_api.json`.
+3.  **Hello World:** Create a simple F# script that prints to the Godot console.
